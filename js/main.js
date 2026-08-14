@@ -1,639 +1,347 @@
-// Pibo - Main Application
+/* ===========================================================
+   PIBO — main.js
+=========================================================== */
+const PIBO_WHATSAPP = "989140909878";
 
-// ==================== FIREBASE CONFIG ====================
-const firebaseConfig = {
-    apiKey: "AIzaSyABWtZFepD4wLmbx1EhcVENfwDiOygSBSg",
-    authDomain: "pibo-c87f1.firebaseapp.com",
-    databaseURL: "https://pibo-c87f1-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "pibo-c87f1",
-    storageBucket: "pibo-c87f1.firebasestorage.app",
-    messagingSenderId: "1000692640688",
-    appId: "1:1000692640688:web:abe607c570bb48ac3b0475",
-    measurementId: "G-NTRQRW9LZN"
-};
-
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
-
-// ==================== STATE ====================
-let cart = JSON.parse(localStorage.getItem('pibo_cart')) || [];
-let products = [];
-let categories = [];
-let settings = {};
-let currentCategory = 'all';
-
-// ==================== DOM ELEMENTS ====================
-const preloader = document.querySelector('.preloader');
-const navbar = document.querySelector('.navbar');
-const cartBtn = document.querySelector('.cart-btn');
-const cartSidebar = document.querySelector('.cart-sidebar');
-const cartOverlay = document.querySelector('.cart-overlay');
-const cartClose = document.querySelector('.cart-close');
-const cartItemsContainer = document.querySelector('.cart-items');
-const cartCount = document.querySelector('.cart-count');
-const cartTotalPrice = document.querySelector('.cart-total-price');
-const categoriesGrid = document.querySelector('.categories-grid');
-const productsGrid = document.querySelector('.products-grid');
-const orderItemsContainer = document.querySelector('.order-items');
-const arModal = document.querySelector('.ar-modal');
-
-// ==================== INITIALIZATION ====================
-document.addEventListener('DOMContentLoaded', () => {
-    initApp();
+document.addEventListener("DOMContentLoaded", async () => {
+  initHeader();
+  initMobileNav();
+  initReveal();
+  await renderMenu();
+  initOrderForm();
+  initSocialLinks();
+  fillPickListAndQr();
+  applySiteLogo();
+  initQuickOrderFab();
+  checkWorkingHours();
 });
 
-async function initApp() {
-    // Hide preloader after load
-    setTimeout(() => {
-        preloader.classList.add('hidden');
-    }, 1500);
+/* ---------- working hours (set from admin panel) ---------- */
+async function checkWorkingHours(){
+  if(typeof pibo_getSettings === "undefined") return;
+  const settings = await pibo_getSettings();
+  if(!settings.openTime || !settings.closeTime) return;
 
-    // Load data from Firebase
-    await loadSettings();
-    await loadCategories();
-    await loadProducts();
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes();
+  const [oh, om] = settings.openTime.split(":").map(Number);
+  const [ch, cm] = settings.closeTime.split(":").map(Number);
+  const openMin = oh * 60 + om, closeMin = ch * 60 + cm;
+  const isOpen = openMin <= closeMin
+    ? (current >= openMin && current < closeMin)
+    : (current >= openMin || current < closeMin);
 
-    // Setup event listeners
-    setupEventListeners();
-    setupScrollAnimations();
-    updateCartUI();
-    renderOrderItems();
+  if(isOpen) return;
 
-    // Update contact info from settings
-    updateContactInfo();
+  const wrap = document.querySelector(".order-form");
+  if(!wrap) return;
+  const banner = document.createElement("div");
+  banner.style.cssText = "background:var(--red);color:#fff;padding:14px 18px;border-radius:14px;text-align:center;font-weight:800;margin-bottom:18px";
+  banner.textContent = `الان بسته‌ایم — ساعات کاری: ${settings.openTime} تا ${settings.closeTime}`;
+  wrap.insertBefore(banner, wrap.firstChild);
+  wrap.querySelectorAll("input, textarea, select, button").forEach(el => el.disabled = true);
 }
 
-// ==================== DATA LOADING ====================
-async function loadSettings() {
-    try {
-        const snapshot = await db.ref('settings').once('value');
-        settings = snapshot.val() || {
-            phone: '09140909878',
-            whatsapp: '09140909878',
-            telegram: '09140909878',
-            about: 'پیتزا پیبو - بهترین طعم‌ها در دستان شما'
-        };
-    } catch (e) {
-        console.error('Error loading settings:', e);
-        settings = {
-            phone: '09140909878',
-            whatsapp: '09140909878',
-            telegram: '09140909878',
-            about: 'پیتزا پیبو - بهترین طعم‌ها در دستان شما'
-        };
-    }
+/* ---------- floating quick-order button ---------- */
+function initQuickOrderFab(){
+  const fab = document.querySelector("[data-quick-order]");
+  const orderSection = document.getElementById("order");
+  if(!fab || !orderSection) return;
+
+  const onScroll = () => {
+    const past = window.scrollY > window.innerHeight * .8;
+    const reached = orderSection.getBoundingClientRect().top < window.innerHeight;
+    fab.classList.toggle("show", past && !reached);
+  };
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive:true });
 }
 
-async function loadCategories() {
-    try {
-        const snapshot = await db.ref('categories').once('value');
-        const data = snapshot.val();
-        if (data) {
-            categories = Object.entries(data).map(([id, cat]) => ({ id, ...cat }));
-        } else {
-            // Default categories
-            categories = [
-                { id: 'pizza', name: 'پیتزا', icon: '🍕', count: 0 },
-                { id: 'potato', name: 'سیب‌زمینی', icon: '🍟', count: 0 },
-                { id: 'drink', name: 'نوشیدنی', icon: '🥤', count: 0 },
-                { id: 'dessert', name: 'دسر', icon: '🍰', count: 0 }
-            ];
-            // Save defaults
-            categories.forEach(cat => {
-                db.ref(`categories/${cat.id}`).set({ name: cat.name, icon: cat.icon });
-            });
-        }
-        renderCategories();
-    } catch (e) {
-        console.error('Error loading categories:', e);
-    }
+/* ---------- site logo (set from admin panel) ---------- */
+async function applySiteLogo(){
+  if(typeof pibo_getSettings === "undefined") return;
+  const settings = await pibo_getSettings();
+  if(!settings.logoImage) return;
+  document.querySelectorAll(".site-logo-mark").forEach(el => {
+    el.style.background = `url('${settings.logoImage}') center/cover no-repeat`;
+    el.textContent = "";
+  });
 }
 
-async function loadProducts() {
-    try {
-        const snapshot = await db.ref('products').once('value');
-        const data = snapshot.val();
-        if (data) {
-            products = Object.entries(data).map(([id, prod]) => ({ id, ...prod }));
-        } else {
-            // Default sample products
-            products = [
-                {
-                    id: 'p1',
-                    name: 'پیتزا مخصوص پیبو',
-                    description: 'ترکیبی از ژامبون، قارچ، فلفل دلمه‌ای و پنیر مخصوص',
-                    price: 285000,
-                    category: 'pizza',
-                    image: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=400',
-                    modelGLB: '',
-                    modelUSDZ: '',
-                    available: true,
-                    badge: 'پرفروش'
-                },
-                {
-                    id: 'p2',
-                    name: 'پیتزا پپرونی',
-                    description: 'پپرونی تازه با پنیر موزارلا و سس مخصوص',
-                    price: 265000,
-                    category: 'pizza',
-                    image: 'https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400',
-                    modelGLB: '',
-                    modelUSDZ: '',
-                    available: true,
-                    badge: ''
-                },
-                {
-                    id: 'p3',
-                    name: 'سیب‌زمینی سرخ‌کرده',
-                    description: 'سیب‌زمینی ترد با ادویه مخصوص پیبو',
-                    price: 95000,
-                    category: 'potato',
-                    image: 'https://images.unsplash.com/photo-1630384060421-cb20d0e0649d?w=400',
-                    modelGLB: '',
-                    modelUSDZ: '',
-                    available: true,
-                    badge: ''
-                },
-                {
-                    id: 'p4',
-                    name: 'نوشابه کلاسیک',
-                    description: 'نوشابه گازدار سرد و خنک',
-                    price: 35000,
-                    category: 'drink',
-                    image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=400',
-                    modelGLB: '',
-                    modelUSDZ: '',
-                    available: true,
-                    badge: ''
-                },
-                {
-                    id: 'p5',
-                    name: 'چیزکیک',
-                    description: 'چیزکیک نیویورکی با سس توت‌فرنگی',
-                    price: 125000,
-                    category: 'dessert',
-                    image: 'https://images.unsplash.com/photo-1533134242443-d4fd215305ad?w=400',
-                    modelGLB: '',
-                    modelUSDZ: '',
-                    available: true,
-                    badge: 'جدید'
-                }
-            ];
-            products.forEach(prod => {
-                db.ref(`products/${prod.id}`).set(prod);
-            });
-        }
-        renderProducts();
-        updateCategoryCounts();
-    } catch (e) {
-        console.error('Error loading products:', e);
-    }
+/* ---------- header shrink on scroll ---------- */
+function initHeader(){
+  const header = document.querySelector(".site-header");
+  if(!header) return;
+  const onScroll = () => header.classList.toggle("scrolled", window.scrollY > 30);
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive:true });
 }
 
-// ==================== RENDERING ====================
-function renderCategories() {
-    if (!categoriesGrid) return;
+/* ---------- mobile nav drawer ---------- */
+function initMobileNav(){
+  const toggle = document.querySelector(".menu-toggle");
+  const drawer = document.querySelector(".mobile-nav");
+  if(!toggle || !drawer) return;
+  const closeBtn = drawer.querySelector(".close-mn");
+  toggle.addEventListener("click", () => drawer.classList.add("open"));
+  closeBtn?.addEventListener("click", () => drawer.classList.remove("open"));
+  drawer.querySelectorAll("a").forEach(a => a.addEventListener("click", () => drawer.classList.remove("open")));
+}
 
-    const allCard = `
-        <div class="category-card active" data-category="all">
-            <div class="category-icon">🍽️</div>
-            <div class="category-name">همه محصولات</div>
-            <div class="category-count">${products.length} محصول</div>
-        </div>
-    `;
-
-    const catsHtml = categories.map(cat => `
-        <div class="category-card" data-category="${cat.id}">
-            <div class="category-icon">${cat.icon}</div>
-            <div class="category-name">${cat.name}</div>
-            <div class="category-count">${cat.count || 0} محصول</div>
-        </div>
-    `).join('');
-
-    categoriesGrid.innerHTML = allCard + catsHtml;
-
-    // Add click handlers
-    categoriesGrid.querySelectorAll('.category-card').forEach(card => {
-        card.addEventListener('click', () => {
-            categoriesGrid.querySelectorAll('.category-card').forEach(c => c.classList.remove('active'));
-            card.classList.add('active');
-            currentCategory = card.dataset.category;
-            renderProducts();
-        });
+/* ---------- scroll reveal animations ---------- */
+function initReveal(){
+  const items = document.querySelectorAll(".reveal, .reveal-scale, .reveal-right");
+  if(!items.length) return;
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting){
+        entry.target.classList.add("in");
+        io.unobserve(entry.target);
+      }
     });
+  }, { threshold:.15, rootMargin:"0px 0px -60px 0px" });
+  items.forEach((el,i) => { el.style.setProperty("--i", i % 8); io.observe(el); });
 }
 
-function renderProducts() {
-    if (!productsGrid) return;
+/* ---------- render pizza menu (sectioned by category, scroll-spy tabs) ---------- */
+async function renderMenu(){
+  const grid = document.querySelector("[data-menu-grid]");
+  const tabsWrap = document.querySelector("[data-menu-tabs]");
+  if(!grid) return;
 
-    const filtered = currentCategory === 'all' 
-        ? products 
-        : products.filter(p => p.category === currentCategory);
+  grid.innerHTML = `<p style="color:var(--ink-soft);text-align:center">در حال دریافت منو…</p>`;
+  const allProducts = await pibo_getProducts();
+  const products = allProducts.filter(p => p.available !== false);
 
-    if (filtered.length === 0) {
-        productsGrid.innerHTML = `
-            <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px; color: #888;">
-                <div style="font-size: 4rem; margin-bottom: 20px;">📭</div>
-                <h3>محصولی یافت نشد</h3>
-                <p>در حال حاضر محصولی در این دسته‌بندی وجود ندارد</p>
-            </div>
-        `;
-        return;
-    }
+  if(!products.length){
+    grid.innerHTML = `<p style="color:var(--ink-soft);text-align:center">
+      هنوز موردی در منو ثبت نشده است. از پنل مدیریت اضافه کنید.
+    </p>`;
+    if(tabsWrap) tabsWrap.innerHTML = "";
+    return;
+  }
 
-    productsGrid.innerHTML = filtered.map((prod, index) => `
-        <div class="product-card reveal" style="transition-delay: ${index * 0.1}s">
-            <div class="product-image-wrapper">
-                <img src="${prod.image}" alt="${prod.name}" class="product-image" loading="lazy">
-                ${prod.badge ? `<span class="product-badge">${prod.badge}</span>` : ''}
-                ${(prod.modelGLB || prod.modelUSDZ) ? `
-                    <button class="product-ar-btn" onclick="openAR('${prod.id}')">
-                        👁️ مشاهده در AR
-                    </button>
-                ` : ''}
-            </div>
-            <div class="product-info">
-                <div class="product-category">${getCategoryName(prod.category)}</div>
-                <h3 class="product-name">${prod.name}</h3>
-                <p class="product-desc">${prod.description}</p>
-                <div class="product-footer">
-                    <div class="product-price">
-                        ${formatPrice(prod.price)}
-                        <span>تومان</span>
-                    </div>
-                    <button class="add-to-cart" onclick="addToCart('${prod.id}')" title="افزودن به سبد">
-                        +
-                    </button>
+  // order categories: prefer the admin-defined order, then whatever else appears
+  const settings = (typeof pibo_getSettings !== "undefined") ? await pibo_getSettings() : {};
+  const definedOrder = Array.isArray(settings.categories) && settings.categories.length
+    ? settings.categories
+    : ["پیتزا", "نوشیدنی", "سیب‌زمینی", "دسر"];
+  const present = Array.from(new Set(products.map(p => p.category || "پیتزا")));
+  const categories = [
+    ...definedOrder.filter(c => present.includes(c)),
+    ...present.filter(c => !definedOrder.includes(c))
+  ];
+
+  tabsWrap.innerHTML = categories.map((c, i) =>
+    `<button type="button" class="menu-tab ${i === 0 ? "active" : ""}" data-tab="menu-cat-${pibo_slugify(c)}">${c}</button>`
+  ).join("");
+
+  grid.innerHTML = categories.map(cat => {
+    const items = products.filter(p => (p.category || "پیتزا") === cat);
+    return `
+      <div class="menu-category-section" id="menu-cat-${pibo_slugify(cat)}">
+        <h3 class="menu-category-title reveal">${cat}</h3>
+        <div class="menu-grid stagger">
+          ${items.map((p, i) => {
+            const hasAr = p.arEnabled !== false;
+            return `
+            <div class="pizza-card reveal" style="--i:${i % 6}">
+              <div class="media" ${p.image ? `style="background-image:url('${p.image}');background-size:cover;background-position:center;"` : ""}>
+                ${hasAr ? `<span class="badge-ar">✦ مشاهده در AR</span>` : ""}
+                ${p.image ? "" : `<span>${p.emoji || "🍽️"}</span>`}
+              </div>
+              <div class="body">
+                <h3>${p.name} <span class="price">${pibo_formatPrice(p.price)}</span></h3>
+                <p>${p.desc || ""}${p.diameter ? ` <span style="color:var(--ink-soft)">· قطر ${p.diameter} سانتی‌متر</span>` : ""}</p>
+                <div class="actions">
+                  ${hasAr ? `<a class="btn btn-outline" href="ar.html?pizza=${p.id}">مشاهده سه‌بعدی</a>` : ""}
+                  <button class="btn btn-primary" data-add="${p.id}">افزودن به سفارش</button>
                 </div>
+              </div>
             </div>
+          `;
+          }).join("")}
         </div>
-    `).join('');
-
-    // Re-trigger scroll animations for new elements
-    setTimeout(() => observeElements(), 100);
-}
-
-function getCategoryName(catId) {
-    const cat = categories.find(c => c.id === catId);
-    return cat ? cat.name : catId;
-}
-
-function updateCategoryCounts() {
-    categories.forEach(cat => {
-        cat.count = products.filter(p => p.category === cat.id).length;
-    });
-    renderCategories();
-}
-
-function updateContactInfo() {
-    const phoneEl = document.querySelector('.contact-phone-number');
-    const waEl = document.querySelector('.contact-whatsapp');
-    const tgEl = document.querySelector('.contact-telegram');
-
-    if (phoneEl) phoneEl.textContent = settings.phone || '09140909878';
-    if (waEl) waEl.href = `https://wa.me/98${(settings.whatsapp || '09140909878').replace(/^0/, '')}`;
-    if (tgEl) tgEl.href = `https://t.me/+98${(settings.telegram || '09140909878').replace(/^0/, '')}`;
-}
-
-// ==================== CART ====================
-function addToCart(productId) {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-
-    const existing = cart.find(item => item.id === productId);
-    if (existing) {
-        existing.qty++;
-    } else {
-        cart.push({
-            id: product.id,
-            name: product.name,
-            price: product.price,
-            image: product.image,
-            qty: 1
-        });
-    }
-
-    saveCart();
-    updateCartUI();
-    showToast(`${product.name} به سبد اضافه شد`);
-}
-
-function removeFromCart(productId) {
-    cart = cart.filter(item => item.id !== productId);
-    saveCart();
-    updateCartUI();
-    renderOrderItems();
-}
-
-function updateQty(productId, change) {
-    const item = cart.find(item => item.id === productId);
-    if (!item) return;
-
-    item.qty += change;
-    if (item.qty <= 0) {
-        removeFromCart(productId);
-        return;
-    }
-
-    saveCart();
-    updateCartUI();
-    renderOrderItems();
-}
-
-function saveCart() {
-    localStorage.setItem('pibo_cart', JSON.stringify(cart));
-}
-
-function updateCartUI() {
-    const totalItems = cart.reduce((sum, item) => sum + item.qty, 0);
-    const totalPrice = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-
-    cartCount.textContent = totalItems;
-    cartCount.style.display = totalItems > 0 ? 'flex' : 'none';
-
-    if (cartTotalPrice) {
-        cartTotalPrice.textContent = formatPrice(totalPrice) + ' تومان';
-    }
-
-    if (cartItemsContainer) {
-        if (cart.length === 0) {
-            cartItemsContainer.innerHTML = `
-                <div class="cart-empty">
-                    <div class="cart-empty-icon">🛒</div>
-                    <h3>سبد خرید خالی است</h3>
-                    <p>محصولاتی که دوست دارید را اضافه کنید</p>
-                </div>
-            `;
-        } else {
-            cartItemsContainer.innerHTML = cart.map(item => `
-                <div class="cart-item">
-                    <img src="${item.image}" alt="${item.name}" class="cart-item-image">
-                    <div class="cart-item-info">
-                        <div class="cart-item-name">${item.name}</div>
-                        <div class="cart-item-price">${formatPrice(item.price)} تومان</div>
-                        <div class="cart-item-qty">
-                            <button class="qty-btn" onclick="updateQty('${item.id}', -1)">−</button>
-                            <span>${item.qty}</span>
-                            <button class="qty-btn" onclick="updateQty('${item.id}', 1)">+</button>
-                        </div>
-                    </div>
-                    <button class="cart-item-remove" onclick="removeFromCart('${item.id}')">🗑️</button>
-                </div>
-            `).join('');
-        }
-    }
-}
-
-function renderOrderItems() {
-    if (!orderItemsContainer) return;
-
-    if (cart.length === 0) {
-        orderItemsContainer.innerHTML = '<p style="text-align: center; color: #888;">سبد خرید خالی است</p>';
-        return;
-    }
-
-    const total = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-
-    orderItemsContainer.innerHTML = cart.map(item => `
-        <div class="order-item">
-            <div>
-                <strong>${item.name}</strong>
-                <span style="color: #888; margin-right: 10px;">x${item.qty}</span>
-            </div>
-            <div style="color: #FF6B35; font-weight: 700;">
-                ${formatPrice(item.price * item.qty)} تومان
-            </div>
-        </div>
-    `).join('') + `
-        <div class="order-total">
-            <span>جمع کل:</span>
-            <span style="color: #FF6B35;">${formatPrice(total)} تومان</span>
-        </div>
+      </div>
     `;
+  }).join("");
+
+  grid.querySelectorAll("[data-add]").forEach(btn => {
+    btn.addEventListener("click", () => addToCart(btn.dataset.add));
+  });
+
+  tabsWrap.querySelectorAll("[data-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const target = document.getElementById(btn.dataset.tab);
+      if(target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+
+  initCategoryScrollSpy();
+  initReveal();
 }
 
-// ==================== AR ====================
-function openAR(productId) {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
+/* highlight the tab matching whichever category section is in view */
+function initCategoryScrollSpy(){
+  const sections = document.querySelectorAll(".menu-category-section");
+  const tabs = document.querySelectorAll("[data-tab]");
+  if(!sections.length || !tabs.length) return;
 
-    const modalTitle = document.querySelector('.ar-modal-title');
-    const modelViewer = document.querySelector('#ar-model-viewer');
-    const arBtnPrimary = document.querySelector('.ar-btn-primary');
-    const arBtnSecondary = document.querySelector('.ar-btn-secondary');
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting){
+        tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === entry.target.id));
+      }
+    });
+  }, { rootMargin: "-150px 0px -65% 0px", threshold: 0 });
 
-    if (modalTitle) modalTitle.textContent = `مشاهده ${product.name} در واقعیت افزوده`;
-
-    if (modelViewer) {
-        if (product.modelGLB) {
-            modelViewer.src = product.modelGLB;
-            modelViewer.setAttribute('ios-src', product.modelUSDZ || '');
-        } else if (product.modelUSDZ) {
-            // For iOS, use USDZ directly
-            modelViewer.style.display = 'none';
-        }
-    }
-
-    // Setup AR buttons
-    if (arBtnPrimary) {
-        if (product.modelGLB) {
-            arBtnPrimary.style.display = 'flex';
-            arBtnPrimary.onclick = () => {
-                if (modelViewer) modelViewer.activateAR();
-            };
-        } else {
-            arBtnPrimary.style.display = 'none';
-        }
-    }
-
-    if (arBtnSecondary) {
-        if (product.modelUSDZ) {
-            arBtnSecondary.style.display = 'flex';
-            arBtnSecondary.innerHTML = '📱 مشاهده در iOS (AR Quick Look)';
-            arBtnSecondary.onclick = () => {
-                const anchor = document.createElement('a');
-                anchor.setAttribute('rel', 'ar');
-                anchor.setAttribute('href', product.modelUSDZ);
-                anchor.click();
-            };
-        } else if (product.modelGLB) {
-            arBtnSecondary.style.display = 'flex';
-            arBtnSecondary.innerHTML = '🤖 مشاهده در Android (Scene Viewer)';
-            arBtnSecondary.onclick = () => {
-                const intent = `intent://arvr.google.com/scene-viewer/1.0?file=${encodeURIComponent(product.modelGLB)}&mode=ar_preferred#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(window.location.href)};end;`;
-                window.location.href = intent;
-            };
-        } else {
-            arBtnSecondary.style.display = 'none';
-        }
-    }
-
-    arModal.classList.add('active');
-    document.body.style.overflow = 'hidden';
+  sections.forEach(s => io.observe(s));
 }
 
-function closeAR() {
-    arModal.classList.remove('active');
-    document.body.style.overflow = '';
+/* ---------- cart ---------- */
+let PIBO_CART = {};
+
+function addToCart(id){
+  PIBO_CART[id] = (PIBO_CART[id] || 0) + 1;
+  renderCart();
+  document.getElementById("order")?.scrollIntoView({ behavior:"smooth", block:"start" });
 }
 
-// ==================== ORDER ====================
-function submitOrder(e) {
+function changeQty(id, delta){
+  if(!PIBO_CART[id]) return;
+  PIBO_CART[id] += delta;
+  if(PIBO_CART[id] <= 0) delete PIBO_CART[id];
+  renderCart();
+}
+
+function renderCart(){
+  const list = document.querySelector("[data-cart-list]");
+  const summary = document.querySelector("[data-cart-summary]");
+  if(!list) return;
+
+  const entries = Object.entries(PIBO_CART);
+  if(!entries.length){
+    list.innerHTML = `<div class="empty-cart">هنوز پیتزایی به سفارش اضافه نکرده‌اید — از بخش منو انتخاب کنید 🍕</div>`;
+    if(summary) summary.style.display = "none";
+    return;
+  }
+
+  let total = 0;
+  list.innerHTML = entries.map(([id, qty]) => {
+    const p = PIBO_PRODUCTS.find(x => x.id === id);
+    if(!p) return "";
+    total += p.price * qty;
+    return `
+      <div class="cart-item">
+        <span class="name">${p.name}</span>
+        <div class="qty">
+          <button type="button" data-dec="${id}">−</button>
+          <span>${qty}</span>
+          <button type="button" data-inc="${id}">+</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  if(summary){
+    summary.style.display = "flex";
+    summary.innerHTML = `<span>مبلغ کل</span><span>${pibo_formatPrice(total)}</span>`;
+  }
+
+  list.querySelectorAll("[data-inc]").forEach(b => b.addEventListener("click", () => changeQty(b.dataset.inc, 1)));
+  list.querySelectorAll("[data-dec]").forEach(b => b.addEventListener("click", () => changeQty(b.dataset.dec, -1)));
+}
+
+/* ---------- order form -> WhatsApp + shared order log ---------- */
+function initOrderForm(){
+  renderCart();
+
+  const form = document.querySelector("[data-order-form]");
+  if(!form) return;
+
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const entries = Object.entries(PIBO_CART);
+    const name = form.querySelector("[name=name]").value.trim();
+    const phone = form.querySelector("[name=phone]").value.trim();
+    const address = form.querySelector("[name=address]").value.trim();
+    const notes = form.querySelector("[name=notes]").value.trim();
 
-    if (cart.length === 0) {
-        showToast('لطفاً ابتدا محصولاتی به سبد خرید اضافه کنید', 'error');
-        return;
+    if(!entries.length){
+      alert("لطفاً حداقل یک پیتزا از منو به سفارش اضافه کنید.");
+      return;
+    }
+    if(!name || !phone || !address){
+      alert("لطفاً نام، شماره تماس و آدرس را وارد کنید.");
+      return;
     }
 
-    const name = document.getElementById('order-name').value;
-    const phone = document.getElementById('order-phone').value;
-    const address = document.getElementById('order-address').value;
-    const notes = document.getElementById('order-notes').value;
+    let total = 0;
+    const lines = entries.map(([id, qty]) => {
+      const p = PIBO_PRODUCTS.find(x => x.id === id);
+      total += p.price * qty;
+      return `• ${p.name} × ${qty} — ${pibo_formatPrice(p.price * qty)}`;
+    });
 
-    if (!name || !phone || !address) {
-        showToast('لطفاً تمام فیلدهای ضروری را پر کنید', 'error');
-        return;
+    const message = [
+      "سلام پیبو 👋 سفارش جدید:",
+      "",
+      ...lines,
+      "",
+      `مبلغ کل: ${pibo_formatPrice(total)}`,
+      "",
+      `نام: ${name}`,
+      `تماس: ${phone}`,
+      `آدرس: ${address}`,
+      notes ? `توضیحات: ${notes}` : ""
+    ].filter(Boolean).join("\n");
+
+    const submitBtn = form.querySelector("button[type=submit]");
+    if(submitBtn) submitBtn.disabled = true;
+
+    saveOrderLocally({
+      name, phone, address, notes,
+      items: entries.map(([id, qty]) => ({ id, qty })),
+      total,
+      date: new Date().toISOString()
+    });
+
+    if(submitBtn) submitBtn.disabled = false;
+
+    const url = `https://wa.me/${PIBO_WHATSAPP}?text=${encodeURIComponent(message)}`;
+    window.open(url, "_blank");
+  });
+}
+
+/* store the order in this browser only — WhatsApp (opened right after) is
+   the real, guaranteed-to-arrive order channel; this local copy just lets
+   you glance back at recent orders placed from this specific device. */
+function saveOrderLocally(order){
+  try{
+    const key = "pibo_orders";
+    const list = JSON.parse(localStorage.getItem(key) || "[]");
+    list.unshift(order);
+    localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
+  }catch(e){ /* storage unavailable, skip silently */ }
+}
+
+/* ---------- social links ---------- */
+function initSocialLinks(){
+  document.querySelectorAll("[data-whatsapp-link]").forEach(a => {
+    a.href = `https://wa.me/${PIBO_WHATSAPP}?text=${encodeURIComponent("سلام پیبو 👋")}`;
+  });
+}
+
+/* ---------- quick-add chips (index.html only) ---------- */
+function fillPickListAndQr(){
+  const availableProducts = PIBO_PRODUCTS.filter(p => p.available !== false);
+  const pickList = document.querySelector("[data-pick-list]");
+  if(pickList){
+    if(availableProducts.length){
+      pickList.innerHTML = availableProducts.map(p => `<button type="button" class="pick-chip" data-pick="${p.id}">${p.name}</button>`).join("");
+      pickList.querySelectorAll("[data-pick]").forEach(chip => chip.addEventListener("click", () => addToCart(chip.dataset.pick)));
+    }else{
+      pickList.innerHTML = `<span style="color:var(--ink-soft);font-size:.85rem">هنوز پیتزایی اضافه نشده</span>`;
     }
-
-    const total = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-
-    const order = {
-        customer: { name, phone, address, notes },
-        items: cart.map(item => ({
-            id: item.id,
-            name: item.name,
-            price: item.price,
-            qty: item.qty
-        })),
-        total,
-        status: 'pending',
-        timestamp: Date.now()
-    };
-
-    db.ref('orders').push(order)
-        .then(() => {
-            showToast('سفارش شما با موفقیت ثبت شد! 🎉');
-            cart = [];
-            saveCart();
-            updateCartUI();
-            renderOrderItems();
-            document.getElementById('order-form').reset();
-        })
-        .catch(err => {
-            console.error(err);
-            showToast('خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.', 'error');
-        });
-}
-
-// ==================== UTILITIES ====================
-function formatPrice(price) {
-    return price.toLocaleString('fa-IR');
-}
-
-function showToast(message, type = 'success') {
-    const existing = document.querySelector('.toast');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.className = 'toast';
-    toast.innerHTML = `
-        <div class="toast-icon">${type === 'success' ? '✓' : '!'}</div>
-        <span>${message}</span>
-    `;
-    document.body.appendChild(toast);
-
-    requestAnimationFrame(() => {
-        toast.classList.add('active');
-    });
-
-    setTimeout(() => {
-        toast.classList.remove('active');
-        setTimeout(() => toast.remove(), 400);
-    }, 3000);
-}
-
-// ==================== EVENT LISTENERS ====================
-function setupEventListeners() {
-    // Navbar scroll
-    window.addEventListener('scroll', () => {
-        if (window.scrollY > 50) {
-            navbar.classList.add('scrolled');
-        } else {
-            navbar.classList.remove('scrolled');
-        }
-    });
-
-    // Cart
-    if (cartBtn) {
-        cartBtn.addEventListener('click', () => {
-            cartSidebar.classList.add('active');
-            cartOverlay.classList.add('active');
-        });
-    }
-
-    if (cartClose) {
-        cartClose.addEventListener('click', closeCart);
-    }
-
-    if (cartOverlay) {
-        cartOverlay.addEventListener('click', closeCart);
-    }
-
-    // AR Modal
-    document.querySelector('.ar-close')?.addEventListener('click', closeAR);
-    arModal?.addEventListener('click', (e) => {
-        if (e.target === arModal) closeAR();
-    });
-
-    // Order form
-    document.getElementById('order-form')?.addEventListener('submit', submitOrder);
-
-    // Smooth scroll for nav links
-    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-        anchor.addEventListener('click', function(e) {
-            e.preventDefault();
-            const target = document.querySelector(this.getAttribute('href'));
-            if (target) {
-                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-        });
-    });
-}
-
-function closeCart() {
-    cartSidebar.classList.remove('active');
-    cartOverlay.classList.remove('active');
-}
-
-// ==================== SCROLL ANIMATIONS ====================
-function setupScrollAnimations() {
-    const observerOptions = {
-        threshold: 0.1,
-        rootMargin: '0px 0px -50px 0px'
-    };
-
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('active');
-            }
-        });
-    }, observerOptions);
-
-    observeElements(observer);
-}
-
-function observeElements(existingObserver) {
-    const observer = existingObserver || new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('active');
-            }
-        });
-    }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
-
-    document.querySelectorAll('.reveal, .reveal-left, .reveal-right, .reveal-scale').forEach(el => {
-        observer.observe(el);
-    });
+  }
 }
